@@ -1,4 +1,4 @@
-package org.bank.account.entity;
+package org.bank.account.dto.responses;
 
 import lombok.AllArgsConstructor;
 import lombok.Data;
@@ -9,15 +9,14 @@ import java.time.Instant;
 @Data
 @AllArgsConstructor
 @NoArgsConstructor
-public class Account {
+public class GetAccountResponse {
     private String id;
     private String ownerName;
     private double balance;
     private String accountNumber;
-    private Currency currency;
-    private AccountStatus status;
+    private String currency;
+    private String status;
     private Instant createdAt;
     private Instant updatedAt;
-    private AccountType accountType;
-    private boolean isDeleted;
+    private String accountType;
 }

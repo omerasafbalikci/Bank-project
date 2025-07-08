@@ -10,10 +10,15 @@ import java.time.Instant;
 @AllArgsConstructor
 @NoArgsConstructor
 public class Transaction {
-    private Long id;
+    private String id;
+    private String transactionId;
     private Long senderId;
     private Long receiverId;
     private double amount;
-    private Instant timestamp;
-    private String type;
+    private Currency currency;
+    private TransactionType transactionType;
+    private TransactionStatus transactionStatus;
+    private String description;
+    private Instant createdAt;
+    private Instant updatedAt;
 }

@@ -1,23 +1,21 @@
-package org.bank.account.entity;
+package org.bank.account.dto.requests;
 
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import org.bank.account.entity.AccountType;
+import org.bank.account.entity.Currency;
 
 import java.time.Instant;
 
 @Data
 @AllArgsConstructor
 @NoArgsConstructor
-public class Account {
-    private String id;
+public class CreateAccountRequest {
     private String ownerName;
     private double balance;
-    private String accountNumber;
     private Currency currency;
-    private AccountStatus status;
     private Instant createdAt;
     private Instant updatedAt;
     private AccountType accountType;
-    private boolean isDeleted;
 }
