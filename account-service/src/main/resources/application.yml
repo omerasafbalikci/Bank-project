@@ -1,0 +1,10 @@
+spring:
+  application:
+    name: account-service
+  data:
+    redis:
+      host: localhost
+      port: 6379
+
+rocksdb:
+  path: data/rocksdb

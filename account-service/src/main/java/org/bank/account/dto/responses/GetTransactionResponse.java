@@ -10,14 +10,16 @@ import java.time.Instant;
 @Data
 @AllArgsConstructor
 @NoArgsConstructor
-public class GetAccountResponse implements Serializable {
+public class GetTransactionResponse implements Serializable {
     private String id;
-    private String ownerName;
-    private double balance;
-    private String accountNumber;
+    private String transactionId;
+    private String senderId;
+    private String receiverId;
+    private double amount;
     private String currency;
-    private String status;
+    private String transactionType;
+    private String transactionStatus;
+    private String description;
     private Instant createdAt;
     private Instant updatedAt;
-    private String accountType;
 }

@@ -1,23 +1,21 @@
-package org.bank.account.dto.responses;
+package org.bank.account.dto.requests;
 
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
-import java.io.Serializable;
-import java.time.Instant;
-
 @Data
 @AllArgsConstructor
 @NoArgsConstructor
-public class GetAccountResponse implements Serializable {
+public class AccountFilterCriteria {
     private String id;
     private String ownerName;
     private double balance;
     private String accountNumber;
     private String currency;
     private String status;
-    private Instant createdAt;
-    private Instant updatedAt;
+    private String createdAt;
+    private String updatedAt;
     private String accountType;
+    private Boolean isDeleted;
 }

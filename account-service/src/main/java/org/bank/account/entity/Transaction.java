@@ -12,8 +12,8 @@ import java.time.Instant;
 public class Transaction {
     private String id;
     private String transactionId;
-    private Long senderId;
-    private Long receiverId;
+    private String senderId;
+    private String receiverId;
     private double amount;
     private Currency currency;
     private TransactionType transactionType;

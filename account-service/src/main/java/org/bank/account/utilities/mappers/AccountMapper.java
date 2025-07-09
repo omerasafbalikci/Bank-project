@@ -18,7 +18,7 @@ public class AccountMapper {
         }
         Account account = new Account();
         account.setOwnerName(request.getOwnerName());
-        account.setBalance(request.getBalance());
+        account.setBalance(0.0);
         String iban = IbanGenerator.generateValidIban("00062", "00001", String.valueOf(new Random().nextLong() & Long.MAX_VALUE));
         account.setAccountNumber(iban);
         account.setCurrency(request.getCurrency());
