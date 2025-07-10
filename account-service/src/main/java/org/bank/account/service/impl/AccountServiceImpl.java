@@ -13,6 +13,7 @@ import org.bank.account.service.abstracts.AccountService;
 import org.bank.account.utilities.exceptions.AccountBalanceException;
 import org.bank.account.utilities.exceptions.AccountNotFoundException;
 import org.bank.account.utilities.exceptions.BadRequestException;
+import org.bank.account.utilities.exceptions.UnexpectedException;
 import org.bank.account.utilities.mappers.AccountMapper;
 import org.bank.account.utilities.mappers.TransactionMapper;
 import org.rocksdb.RocksIterator;
@@ -33,6 +34,7 @@ public class AccountServiceImpl implements AccountService {
     private final RocksDbService rocksDb;
     private final AccountMapper accountMapper;
     private final TransactionMapper transactionMapper;
+    private final RedisLockService redisLockService;
 
     @Override
     @Cacheable(value = "accounts", key = "#accountId", unless = "#result == null")
@@ -148,59 +150,80 @@ public class AccountServiceImpl implements AccountService {
     @CachePut(value = "accounts", key = "#depositRequest.accountId")
     public GetTransactionResponse deposit(DepositRequest depositRequest) {
         if (depositRequest.getAmount() <= 0) throw new BadRequestException("Amount must be positive");
-        Account account = rocksDb.get("account:" + depositRequest.getAccountId(), Account.class);
-        if (account == null || account.isDeleted()) throw new AccountNotFoundException("Account not found or deleted");
-        if (!account.getCurrency().equals(depositRequest.getCurrency()))
-            throw new BadRequestException("Currencies do not match");
-        account.setBalance(account.getBalance() + depositRequest.getAmount());
-        account.setUpdatedAt(Instant.now());
-        rocksDb.save("account:" + depositRequest.getAccountId(), account);
-        Transaction transaction = new Transaction(
-                UUID.randomUUID().toString(),
-                UUID.randomUUID().toString(),
-                null,
-                account.getId(),
-                depositRequest.getAmount(),
-                depositRequest.getCurrency(),
-                TransactionType.DEPOSIT,
-                TransactionStatus.SUCCESS,
-                depositRequest.getDescription(),
-                Instant.now(),
-                Instant.now()
-        );
-        rocksDb.save("transaction:" + transaction.getId(), transaction);
-        return transactionMapper.toGetTransactionResponse(transaction);
+        String accountId = depositRequest.getAccountId();
+        String lockKey = "lock:account:" + accountId;
+        boolean locked = redisLockService.tryLock(lockKey, 5000);
+        if (!locked) throw new BadRequestException("Could not acquire lock for deposit");
+
+        try {
+            Account account = rocksDb.get("account:" + accountId, Account.class);
+            if (account == null || account.isDeleted())
+                throw new AccountNotFoundException("Account not found or deleted");
+            if (!account.getCurrency().equals(depositRequest.getCurrency()))
+                throw new BadRequestException("Currencies do not match");
+            account.setBalance(account.getBalance() + depositRequest.getAmount());
+            account.setUpdatedAt(Instant.now());
+            rocksDb.save("account:" + accountId, account);
+            Transaction transaction = new Transaction(
+                    UUID.randomUUID().toString(),
+                    UUID.randomUUID().toString(),
+                    null,
+                    accountId,
+                    depositRequest.getAmount(),
+                    depositRequest.getCurrency(),
+                    TransactionType.DEPOSIT,
+                    TransactionStatus.SUCCESS,
+                    depositRequest.getDescription(),
+                    Instant.now(),
+                    Instant.now()
+            );
+            rocksDb.save("transaction:" + transaction.getId(), transaction);
+            return transactionMapper.toGetTransactionResponse(transaction);
+        } finally {
+            redisLockService.unlock(lockKey);
+        }
     }
 
     @Override
     @CachePut(value = "accounts", key = "#withdrawRequest.accountId")
     public GetTransactionResponse withdraw(WithdrawRequest withdrawRequest) {
         if (withdrawRequest.getAmount() <= 0) throw new BadRequestException("Amount must be positive");
-        Account account = rocksDb.get("account:" + withdrawRequest.getAccountId(), Account.class);
-        if (account == null || account.isDeleted()) throw new AccountNotFoundException("Account not found or deleted");
-        if (!account.getCurrency().equals(withdrawRequest.getCurrency()))
-            throw new BadRequestException("Currencies do not match");
-        if (account.getBalance() < withdrawRequest.getAmount())
-            throw new AccountBalanceException("Insufficient balance");
+        String accountId = withdrawRequest.getAccountId();
+        String lockKey = "lock:account:" + accountId;
+        boolean locked = redisLockService.tryLock(lockKey, 5000);
+        if (!locked) throw new BadRequestException("Could not acquire lock for withdraw");
 
-        account.setBalance(account.getBalance() - withdrawRequest.getAmount());
-        account.setUpdatedAt(Instant.now());
-        rocksDb.save("account:" + withdrawRequest.getAccountId(), account);
-        Transaction transaction = new Transaction(
-                UUID.randomUUID().toString(),
-                UUID.randomUUID().toString(),
-                account.getId(),
-                null,
-                withdrawRequest.getAmount(),
-                withdrawRequest.getCurrency(),
-                TransactionType.WITHDRAW,
-                TransactionStatus.SUCCESS,
-                withdrawRequest.getDescription(),
-                Instant.now(),
-                Instant.now()
-        );
-        rocksDb.save("transaction:" + transaction.getId(), transaction);
-        return transactionMapper.toGetTransactionResponse(transaction);
+        try {
+            Account account = rocksDb.get("account:" + accountId, Account.class);
+            if (account == null || account.isDeleted())
+                throw new AccountNotFoundException("Account not found or deleted");
+            if (!account.getCurrency().equals(withdrawRequest.getCurrency()))
+                throw new BadRequestException("Currencies do not match");
+            if (account.getBalance() < withdrawRequest.getAmount())
+                throw new AccountBalanceException("Insufficient balance");
+
+            account.setBalance(account.getBalance() - withdrawRequest.getAmount());
+            account.setUpdatedAt(Instant.now());
+            rocksDb.save("account:" + accountId, account);
+
+            Transaction transaction = new Transaction(
+                    UUID.randomUUID().toString(),
+                    UUID.randomUUID().toString(),
+                    accountId,
+                    null,
+                    withdrawRequest.getAmount(),
+                    withdrawRequest.getCurrency(),
+                    TransactionType.WITHDRAW,
+                    TransactionStatus.SUCCESS,
+                    withdrawRequest.getDescription(),
+                    Instant.now(),
+                    Instant.now()
+            );
+            rocksDb.save("transaction:" + transaction.getId(), transaction);
+            return transactionMapper.toGetTransactionResponse(transaction);
+        } finally {
+            redisLockService.unlock(lockKey);
+        }
     }
 
     @Override
@@ -214,38 +237,66 @@ public class AccountServiceImpl implements AccountService {
         if (transferRequest.getAmount() <= 0) throw new BadRequestException("Amount must be positive");
         if (transferRequest.getFromAccountId().equals(transferRequest.getToAccountId()))
             throw new BadRequestException("Sender and receiver must differ");
-        Account sender = rocksDb.get("account:" + transferRequest.getFromAccountId(), Account.class);
-        Account receiver = rocksDb.get("account:" + transferRequest.getToAccountId(), Account.class);
+        String fromId = transferRequest.getFromAccountId();
+        String toId = transferRequest.getToAccountId();
 
-        if (sender == null || sender.isDeleted()) throw new AccountNotFoundException("Sender not found or deleted");
-        if (receiver == null || receiver.isDeleted())
-            throw new AccountNotFoundException("Receiver not found or deleted");
-        if (!sender.getCurrency().equals(transferRequest.getCurrency()) || !receiver.getCurrency().equals(transferRequest.getCurrency()))
-            throw new BadRequestException("Currencies do not match");
-        if (sender.getBalance() < transferRequest.getAmount())
-            throw new AccountBalanceException("Insufficient balance");
+        String firstLock = fromId.compareTo(toId) < 0 ? fromId : toId;
+        String secondLock = fromId.compareTo(toId) < 0 ? toId : fromId;
 
-        sender.setBalance(sender.getBalance() - transferRequest.getAmount());
-        receiver.setBalance(receiver.getBalance() + transferRequest.getAmount());
-        sender.setUpdatedAt(Instant.now());
-        receiver.setUpdatedAt(Instant.now());
-        rocksDb.save("account:" + transferRequest.getFromAccountId(), sender);
-        rocksDb.save("account:" + transferRequest.getToAccountId(), receiver);
+        String firstKey = "lock:account:" + firstLock;
+        String secondKey = "lock:account:" + secondLock;
 
-        Transaction transaction = new Transaction(
-                UUID.randomUUID().toString(),
-                UUID.randomUUID().toString(),
-                sender.getId(),
-                receiver.getId(),
-                transferRequest.getAmount(),
-                transferRequest.getCurrency(),
-                TransactionType.TRANSFER,
-                TransactionStatus.SUCCESS,
-                transferRequest.getDescription(),
-                Instant.now(),
-                Instant.now()
-        );
-        rocksDb.save("transaction:" + transaction.getId(), transaction);
-        return "Transfer completed successfully";
+        boolean firstLocked = redisLockService.tryLock(firstKey, 5000);
+        if (!firstLocked) {
+            throw new BadRequestException("Could not acquire lock for account " + firstLock);
+        }
+
+        boolean secondLocked = false;
+        try {
+            secondLocked = redisLockService.tryLock(secondKey, 5000);
+            if (!secondLocked) {
+                throw new BadRequestException("Could not acquire lock for account " + secondLock);
+            }
+
+            Account sender = rocksDb.get("account:" + fromId, Account.class);
+            Account receiver = rocksDb.get("account:" + toId, Account.class);
+
+            if (sender == null || sender.isDeleted())
+                throw new AccountNotFoundException("Sender not found or deleted");
+            if (receiver == null || receiver.isDeleted())
+                throw new AccountNotFoundException("Receiver not found or deleted");
+            if (!sender.getCurrency().equals(transferRequest.getCurrency()) ||
+                    !receiver.getCurrency().equals(transferRequest.getCurrency()))
+                throw new BadRequestException("Currencies do not match");
+            if (sender.getBalance() < transferRequest.getAmount())
+                throw new AccountBalanceException("Insufficient balance");
+
+            sender.setBalance(sender.getBalance() - transferRequest.getAmount());
+            receiver.setBalance(receiver.getBalance() + transferRequest.getAmount());
+            sender.setUpdatedAt(Instant.now());
+            receiver.setUpdatedAt(Instant.now());
+
+            rocksDb.save("account:" + sender.getId(), sender);
+            rocksDb.save("account:" + receiver.getId(), receiver);
+
+            Transaction transaction = new Transaction(
+                    UUID.randomUUID().toString(),
+                    UUID.randomUUID().toString(),
+                    sender.getId(),
+                    receiver.getId(),
+                    transferRequest.getAmount(),
+                    transferRequest.getCurrency(),
+                    TransactionType.TRANSFER,
+                    TransactionStatus.SUCCESS,
+                    transferRequest.getDescription(),
+                    Instant.now(),
+                    Instant.now()
+            );
+            rocksDb.save("transaction:" + transaction.getId(), transaction);
+            return "Transfer completed successfully";
+        } finally {
+            if (secondLocked) redisLockService.unlock(secondKey);
+            redisLockService.unlock(firstKey);
+        }
     }
 }
